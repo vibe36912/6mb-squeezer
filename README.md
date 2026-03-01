@@ -1,6 +1,6 @@
 # 6MB Squeezer
 
-A purely client-side video compressor that severely degrades video quality to preserve audio. It targets a strict `< 6MB` file size, making it perfect for sharing music drops, podcasts, or meme videos over strict file-size limits where the visual quality doesn't matter.
+A purely client-side video compressor that severely degrades video quality to preserve audio. It targets a strict `< 6MB` file size.
 
 ## How it Works
 Instead of lowering the overall quality evenly, this tool:
