@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>6MB Squeezer</title>
+    
+    <!-- MP4 & WEBM Muxers -->
+    <script src="https://unpkg.com/mp4-muxer/build/mp4-muxer.js"></script>
+    <script src="https://unpkg.com/webm-muxer/build/webm-muxer.js"></script>
+
+    <style>
+        body {
+            margin: 0;
+            background: radial-gradient(circle at 50% -10%, #2a2a3d, #121212);
+            background-attachment: fixed;
+            color: #e0e0e0;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+        }
+        
+        #main-container {
+            width: 90%;
+            max-width: 600px;
+        }
+
+        #drop-zone {
+            width: 100%;
+            height: 250px;
+            border: 3px dashed #444;
+            border-radius: 12px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.3s;
+            cursor: pointer;
+            background: rgba(30, 30, 40, 0.8);
+            backdrop-filter: blur(5px);
+            box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+            text-align: center;
+            padding: 20px;
+            box-sizing: border-box;
+        }
+
+        #drop-zone.hover {
+            border-color: #00d2ff;
+            background-color: rgba(0, 210, 255, 0.1);
+        }
+
+        #drop-zone h2 {
+            font-size: 2rem;
+            margin-bottom: 10px;
+            color: #fff;
+            text-shadow: 0 2px 10px rgba(0, 210, 255, 0.3);
+        }
+
+        #processing-container {
+            display: none;
+            width: 100%;
+            background: rgba(26, 26, 32, 0.85);
+            padding: 30px;
+            border-radius: 12px;
+            border: 1px solid #444;
+            box-shadow: 0 12px 35px rgba(0,0,0,0.6);
+            box-sizing: border-box;
+            text-align: center;
+        }
+
+        #status {
+            font-size: 1.2rem;
+            font-weight: bold;
+            color: #00d2ff;
+            margin-bottom: 15px;
+            font-family: 'Segoe UI Mono', monospace;
+        }
+
+        .progress-bar {
+            width: 100%;
+            height: 12px;
+            background-color: #111;
+            border-radius: 6px;
+            overflow: hidden;
+            border: 1px solid #333;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #00d2ff, #00ff41);
+            width: 0%;
+            transition: width 0.1s;
+        }
+        
+        .btn {
+            padding: 12px 32px;
+            font-size: 1.2rem;
+            background: #222;
+            color: #00d2ff;
+            border: 2px solid #00d2ff;
+            border-radius: 30px;
+            box-shadow: 0 4px 15px rgba(0, 210, 255, 0.2);
+            cursor: pointer;
+            font-weight: bold;
+            transition: all 0.2s;
+            margin-top: 20px;
+        }
+        .btn:hover { background: #00d2ff; color: #000; }
+    </style>
+</head>
+<body>
+
+    <div id="main-container">
+        <!-- Drop Zone UI -->
+        <div id="drop-zone" onclick="document.getElementById('file-input').click()">
+            <h2>Drop Video Here</h2>
+            <span style="color:#aaa; font-size: 1.1em; line-height: 1.5;">
+                Attempts to compress the output strictly to <strong>&lt; 6 MB</strong>.<br>
+                Maintains original video dimensions but heavily reduces visual quality to preserve audio. Ideal for single-image videos.
+            </span>
+            <button class="btn">📁 Browse for File</button>
+            <input type="file" id="file-input" accept="video/mp4, video/webm" style="display:none">
+        </div>
+
+        <!-- Processing UI -->
+        <div id="processing-container">
+            <div id="status">Reading data...</div>
+            <div class="progress-bar">
+                <div class="progress-fill" id="progress-fill"></div>
+            </div>
+            <div id="info-text" style="color: #888; margin-top: 15px; font-size: 0.95rem;"></div>
+        </div>
+    </div>
+
+    <script>
+        const dropZone = document.getElementById('drop-zone');
+        const fileInput = document.getElementById('file-input');
+        const processingContainer = document.getElementById('processing-container');
+        const statusDiv = document.getElementById('status');
+        const progressFill = document.getElementById('progress-fill');
+        const infoText = document.getElementById('info-text');
+
+        // Drag & Drop Handling
+        window.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('hover'); });
+        window.addEventListener('dragleave', (e) => { 
+            if (!e.relatedTarget || e.relatedTarget.nodeName === "HTML") dropZone.classList.remove('hover'); 
+        });
+        window.addEventListener('drop', (e) => {
+            e.preventDefault(); dropZone.classList.remove('hover');
+            if (e.dataTransfer.files.length) processFile(e.dataTransfer.files[0]);
+        });
+        fileInput.addEventListener('change', (e) => {
+            if (e.target.files.length) processFile(e.target.files[0]);
+            fileInput.value = ''; 
+        });
+
+        // Yield function to keep browser responsive
+        const yieldToMain = () => new Promise(r => {
+            const mc = new MessageChannel();
+            mc.port1.onmessage = r;
+            mc.port2.postMessage(null);
+        });
+
+        async function processFile(file) {
+            if (!file.name.match(/\.(mp4|webm)$/i)) {
+                alert('Please provide an MP4 or WEBM file.');
+                return;
+            }
+
+            dropZone.style.display = 'none';
+            processingContainer.style.display = 'block';
+            progressFill.style.width = '0%';
+            statusDiv.textContent = "Analyzing Video Headers...";
+
+            try {
+                const videoUrl = URL.createObjectURL(file);
+
+                const videoElement = document.createElement('video');
+                videoElement.muted = true;
+                videoElement.playsInline = true;
+                videoElement.src = videoUrl;
+                
+                // Strict loader: Forces browser to actually decode the first frame to get REAL dimensions
+                await new Promise((resolve, reject) => {
+                    videoElement.addEventListener('loadeddata', () => {
+                        if (videoElement.videoWidth > 0) resolve();
+                    });
+                    videoElement.addEventListener('error', () => reject(new Error("Failed to decode video file.")));
+                    videoElement.load();
+                });
+
+                let origW = videoElement.videoWidth;
+                let origH = videoElement.videoHeight;
+
+                if (!origW || !origH) {
+                    throw new Error("Invalid video dimensions. Audio-only or corrupted file?");
+                }
+
+                // Protect encoder from 4K/8K files. 1920 (1080p equivalent) is the max safe limit.
+                let outW = origW;
+                let outH = origH;
+                const MAX_EDGE = 1920; 
+
+                if (outW > MAX_EDGE || outH > MAX_EDGE) {
+                    const ratio = Math.min(MAX_EDGE / outW, MAX_EDGE / outH);
+                    outW = Math.round(outW * ratio);
+                    outH = Math.round(outH * ratio);
+                }
+
+                // Strict H.264/VP9 Alignment: Video sides MUST be perfectly divisible by 2
+                outW = Math.max(2, Math.round(outW / 2) * 2);
+                outH = Math.max(2, Math.round(outH / 2) * 2);
+
+                // Smart Block Sizing: Targets an internal canvas of ~160px.
+                // Huge videos get massive blocks, small videos get smaller blocks.
+                const TARGET_INTERNAL_EDGE = 160;
+                const downscaleRatio = Math.min(1, TARGET_INTERNAL_EDGE / Math.max(outW, outH));
+                
+                const smallW = Math.max(2, Math.round((outW * downscaleRatio) / 2) * 2);
+                const smallH = Math.max(2, Math.round((outH * downscaleRatio) / 2) * 2);
+
+                statusDiv.textContent = "Extracting raw audio track...";
+
+                // Decode Audio (Forced to exactly 48,000 Hz)
+                const audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 48000 });
+                const arrayBuffer = await file.arrayBuffer();
+                const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+                const duration = audioBuffer.duration;
+
+                // Target 5.0 MB payload
+                const targetBytes = 5.0 * 1024 * 1024; 
+                const targetBits = targetBytes * 8;
+                const totalBitrate = Math.floor(targetBits / duration);
+                
+                // Allocate a microscopic 30 kbps to the 1-FPS block video track
+                const videoBitrate = 15_000; 
+                let audioBitrate = totalBitrate - videoBitrate;
+                
+                if (audioBitrate > 384_000) audioBitrate = 384_000;
+                if (audioBitrate < 32_000) audioBitrate = 32_000; 
+
+                infoText.innerHTML = `Size: <b>${outW}x${outH}</b> | Audio Alloc: <b>${Math.round(audioBitrate/1000)} kbps</b>`;
+                statusDiv.textContent = "Initializing Codecs...";
+                await yieldToMain();
+
+                const numChan = Math.min(2, audioBuffer.numberOfChannels); 
+                const sampleRate = audioBuffer.sampleRate; 
+                
+                let format = 'mp4';
+                let aCodec = 'mp4a.40.2';
+                
+                const aacSupport = await AudioEncoder.isConfigSupported({ 
+                    codec: aCodec, numberOfChannels: numChan, sampleRate: sampleRate, bitrate: audioBitrate 
+                });
+                
+                let muxer = null;
+                let videoEncoderConfig = null;
+
+                if (aacSupport.supported) {
+                    format = 'mp4';
+                    muxer = new window.Mp4Muxer.Muxer({
+                        target: new window.Mp4Muxer.ArrayBufferTarget(),
+                        video: { codec: 'avc', width: outW, height: outH }, 
+                        audio: { codec: 'aac', numberOfChannels: numChan, sampleRate: sampleRate },
+                        fastStart: 'in-memory'
+                    });
+                    videoEncoderConfig = { 
+                        codec: 'avc1.4D4028', // Main Profile Level 4.0 (Supports 1080p perfectly)
+                        width: outW, height: outH, bitrate: videoBitrate, framerate: 1, bitrateMode: 'constant', hardwareAcceleration: 'prefer-software'
+                    };
+                } else {
+                    format = 'webm';
+                    aCodec = 'opus';
+                    muxer = new window.WebMMuxer.Muxer({
+                        target: new window.WebMMuxer.ArrayBufferTarget(),
+                        video: { codec: 'V_VP9', width: outW, height: outH }, 
+                        audio: { codec: 'A_OPUS', numberOfChannels: numChan, sampleRate: sampleRate }
+                    });
+                    videoEncoderConfig = { 
+                        codec: 'vp09.00.31.08', // Level 3.1 (Supports 1080p perfectly)
+                        width: outW, height: outH, bitrate: videoBitrate, framerate: 1, bitrateMode: 'constant', hardwareAcceleration: 'prefer-software'
+                    };
+                }
+
+                let encError = null;
+
+                const videoEncoder = new VideoEncoder({
+                    output: (chunk, meta) => muxer.addVideoChunk(chunk, meta),
+                    error: e => encError = e
+                });
+                videoEncoder.configure(videoEncoderConfig);
+
+                const audioEncoder = new AudioEncoder({
+                    output: (chunk, meta) => muxer.addAudioChunk(chunk, meta),
+                    error: e => encError = e
+                });
+                audioEncoder.configure({ 
+                    codec: aCodec, numberOfChannels: numChan, sampleRate: sampleRate, bitrate: audioBitrate 
+                });
+
+                statusDiv.textContent = `Encoding Audio (${format.toUpperCase()})...`;
+
+                const totalFrames = audioBuffer.length;
+                const framesPerChunk = sampleRate; 
+                
+                for (let i = 0; i < totalFrames; i += framesPerChunk) {
+                    if (encError) throw encError;
+                    const chunkFrames = Math.min(framesPerChunk, totalFrames - i);
+                    const data = new Float32Array(chunkFrames * numChan);
+                    
+                    for (let c = 0; c < numChan; c++) {
+                        data.set(audioBuffer.getChannelData(c).subarray(i, i + chunkFrames), c * chunkFrames);
+                    }
+                    
+                    const audioData = new AudioData({
+                        format: 'f32-planar', sampleRate: sampleRate, numberOfFrames: chunkFrames, numberOfChannels: numChan,
+                        timestamp: (i / sampleRate) * 1_000_000,
+                        data: data
+                    });
+                    
+                    audioEncoder.encode(audioData);
+                    audioData.close();
+                    
+                    while (audioEncoder.encodeQueueSize > 5) await yieldToMain();
+                    
+                    if (i % (framesPerChunk * 2) === 0) {
+                        progressFill.style.width = Math.round((i / totalFrames) * 60) + '%';
+                    }
+                }
+
+                statusDiv.textContent = "Generating Smart Video Blocks...";
+
+                const smallCanvas = document.createElement('canvas');
+                smallCanvas.width = smallW; 
+                smallCanvas.height = smallH;
+                const smallCtx = smallCanvas.getContext('2d', { willReadFrequently: true });
+
+                const canvas = document.createElement('canvas');
+                canvas.width = outW; 
+                canvas.height = outH;
+                const ctx = canvas.getContext('2d', { willReadFrequently: true });
+
+                const totalSeconds = Math.ceil(duration);
+                
+                for(let sec = 0; sec < totalSeconds; sec++) {
+                    if (encError) throw encError;
+                    
+                    const targetTime = Math.min(sec, videoElement.duration);
+                    
+                    if (Math.abs(videoElement.currentTime - targetTime) < 0.01) {
+                        // Already at target time (video track ended), skip the seek delay entirely!
+                    } else {
+                        videoElement.currentTime = targetTime;
+                        await new Promise(r => {
+                            const fallback = setTimeout(() => {
+                                videoElement.removeEventListener('seeked', onSeek);
+                                r();
+                            }, 400);
+                            
+                            function onSeek() {
+                                clearTimeout(fallback);
+                                r();
+                            }
+                            
+                            videoElement.addEventListener('seeked', onSeek, { once: true });
+                        });
+                    }
+
+                    // Squash original video directly into tiny canvas
+                    smallCtx.drawImage(videoElement, 0, 0, smallW, smallH);
+
+                    // Stop the browser from blurring the stretch
+                    ctx.imageSmoothingEnabled = true;
+                    ctx.imageSmoothingQuality = "high";
+                    
+                    // Stretch it directly over the full output canvas (Yielding sharp pixel blocks)
+                    ctx.drawImage(smallCanvas, 0, 0, outW, outH);
+
+                    const frame = new VideoFrame(canvas, { timestamp: sec * 1_000_000, duration: 1_000_000 });
+                    
+                    videoEncoder.encode(frame, { keyFrame: (sec % 10 === 0) });
+                    frame.close();
+                    
+                    while (videoEncoder.encodeQueueSize > 5) await yieldToMain();
+                    if (sec % 2 === 0) progressFill.style.width = (60 + Math.round((sec / totalSeconds) * 40)) + '%';
+                }
+
+                statusDiv.textContent = "Finalizing Container Data...";
+                
+                await audioEncoder.flush(); audioEncoder.close();
+                await videoEncoder.flush(); videoEncoder.close();
+                if (encError) throw encError;
+
+                muxer.finalize();
+                
+                const mimeType = format === 'mp4' ? 'video/mp4' : 'video/webm';
+                const finalBlob = new Blob([muxer.target.buffer], { type: mimeType });
+
+                progressFill.style.width = '100%';
+                statusDiv.textContent = "Done! Downloading...";
+                infoText.innerHTML += ` | Final Size: <b style="color:#00ff41">${(finalBlob.size / 1024 / 1024).toFixed(2)} MB</b>`;
+
+                const downloadUrl = URL.createObjectURL(finalBlob);
+                const a = document.createElement('a');
+                a.href = downloadUrl;
+                a.download = file.name.replace(/\.[^/.]+$/, "") + `_Compressed.${format}`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+
+                URL.revokeObjectURL(videoUrl);
+
+                setTimeout(() => {
+                    dropZone.style.display = 'flex';
+                    processingContainer.style.display = 'none';
+                    URL.revokeObjectURL(downloadUrl);
+                }, 4000);
+
+            } catch (err) {
+                console.error(err);
+                statusDiv.style.color = "#ff4444";
+                statusDiv.textContent = "Error: " + err.message;
+                setTimeout(() => {
+                    dropZone.style.display = 'flex';
+                    processingContainer.style.display = 'none';
+                    statusDiv.style.color = "#00d2ff";
+                }, 5000);
+            }
+        }
+    </script>
+</body>
+</html>
