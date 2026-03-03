@@ -1,19 +1,15 @@
-# 6MB Squeezer
+# Audio-Priority 6MB Squeezer
 
-A purely client-side video compressor that severely degrades video quality to preserve audio. It targets a strict `< 6MB` file size.
+A purely client-side web utility that compresses MP4/WEBM files to strictly under 6 MB (targeting 5.0 MB). It maximizes audio fidelity by aggressively degrading the video track, making it optimal for audio-centric or static-image videos.
 
-## How it Works
-Instead of lowering the overall quality evenly, this tool:
-1. Crushes the video track to **1 Frame Per Second** and a microscopic **15 kbps**.
-2. Calculates the remaining bandwidth available within a 5MB target limit.
-3. Allocates 100% of that remaining bandwidth to the audio track (usually resulting in transparent, CD-quality AAC/Opus).
+## Technical Details
 
-## Features
-- **Zero Server Processing:** Everything runs locally in your browser using the modern WebCodecs API and WebAssembly. Your files never leave your device.
-- **Dynamic Bitrate:** Automatically calculates the max audio bitrate based on the video's duration.
-- **Smart Scaling:** Caps maximum resolution at 1080p and ensures strict H.264 divisibility constraints to prevent encoder crashes.
-- **Auto-Fallback:** Uses `H.264/AAC` (MP4) if supported by your browser, and gracefully falls back to `VP9/Opus` (WebM) if not.
+- **Video Pipeline:** Uses the WebCodecs API (`VP9`, profile `vp09.00.31.08`). Downscales max dimension to ~320px (mod 2 aligned), restricts framerate to 1 FPS, and hard-caps video bitrate at 15 kbps.
+- **Audio Pipeline:** Extracts PCM data via `AudioContext` (48kHz resample). Encodes via WebCodecs API (`Opus`). Calculates available bit budget (targeting 5 MB total) and dynamically allocates remaining bandwidth to audio (32 kbps to 384 kbps).
+- **Muxing:** Interleaves frames and packages into a `.webm` container using `webm-muxer`.
+- **Execution:** 100% local browser processing. Includes asynchronous event-loop yielding to maintain main-thread responsiveness during the chunk encoding loop.
 
-## Limitations
-- **Memory Constraint:** The app uses `AudioContext.decodeAudioData()`, which decodes the entire audio track into RAM at once. It works flawlessly for standard videos (under 10-15 minutes), but attempting to process a 3-hour podcast may crash your browser tab due to memory limits.
-- **WebCodecs Requirement:** Requires a modern, up-to-date browser that supports the WebCodecs API.
+## Dependencies
+
+- [webm-muxer](https://github.com/Vanilagy/webm-muxer) (Loaded via unpkg CDN)
+- Browser with WebCodecs API support.
