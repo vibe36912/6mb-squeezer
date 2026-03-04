@@ -203,19 +203,13 @@
                 // Scale max dimension towards ~320px while preserving aspect ratio
                 let outW = origW;
                 let outH = origH;
-
-                if (outW > outH) {
-                    if (outW > 320) {
-                        const ratio = 320 / outW;
-                        outW = Math.round(outW * ratio);
-                        outH = Math.round(outH * ratio);
-                    }
-                } else if (outH > outW) {
-                    if (outH > 320) {
-                        const ratio = 320 / outH;
-                        outW = Math.round(outW * ratio);
-                        outH = Math.round(outH * ratio);
-                    }
+                
+                const maxDim = Math.max(outW, outH);
+                
+                if (maxDim > 320) {
+                    const ratio = 320 / maxDim;
+                    outW = Math.round(outW * ratio);
+                    outH = Math.round(outH * ratio);
                 }
 
                 // Strict H.264/VP9 Alignment: Video sides MUST be perfectly divisible by 2
